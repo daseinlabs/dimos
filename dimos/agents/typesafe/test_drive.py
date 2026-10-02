@@ -55,6 +55,19 @@ def test_questions_one_choice_per_axis_plus_stop_and_target() -> None:
     }
 
 
+def test_camera_adds_a_note_and_changes_nothing_else() -> None:
+    plain, seen = questions(("chair",)), questions(("chair",), camera=True)
+    assert plain.keys() == seen.keys()
+    for qid, q in seen.items():
+        instructions = dict(q["instructions"])  # type: ignore[arg-type]
+        assert "image" in instructions.pop("camera")
+        before = plain[qid]["instructions"]
+        assert instructions == (before if isinstance(before, dict) else {"question": before})
+        assert {k: v for k, v in q.items() if k != "instructions"} == {
+            k: v for k, v in plain[qid].items() if k != "instructions"
+        }
+
+
 def test_forward_and_strafe_compose() -> None:
     d = _decode(_answers(x="forward", y="left"))
     assert (d.x, d.y, d.yaw, d.stop, d.labels) == (

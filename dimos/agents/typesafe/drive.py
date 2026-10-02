@@ -35,6 +35,13 @@ _CONTEXT_Y = (
 )
 
 
+_CAMERA = (
+    "The image after the state is the robot's forward camera view, taken when the state was. "
+    "Use it to confirm the target and see what is in the way ahead; the state's bearings and "
+    "distances stay the measure of where things are."
+)
+
+
 def _opt(what: str, not_for: str, examples: list[object]) -> Text:
     return {"what": what, "not_for": not_for, "examples": examples}
 
@@ -43,7 +50,7 @@ def _q(question: str) -> Text:
     return {"question": question, "context": _CONTEXT}
 
 
-def questions(labels: tuple[str, ...]) -> dict[str, Question]:
+def questions(labels: tuple[str, ...], *, camera: bool = False) -> dict[str, Question]:
     qs: dict[str, Question] = {
         "drive.x": choice(
             _q(
@@ -152,6 +159,13 @@ def questions(labels: tuple[str, ...]) -> dict[str, Question]:
             "Which entry of `objects` is the thing `goal` asks to go to? Match by `label`.",
             {**dict.fromkeys(labels), "none": "`goal` names nothing that is in `objects`"},
         )
+    if camera:
+        for q in qs.values():
+            text = q["instructions"]
+            q["instructions"] = {
+                **(text if isinstance(text, dict) else {"question": text}),
+                "camera": _CAMERA,
+            }
     return qs
 
 

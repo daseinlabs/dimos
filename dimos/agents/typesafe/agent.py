@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import replace
 import json
 import os
@@ -43,6 +44,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.vision_msgs.Detection2DArray import Detection2DArray
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
@@ -115,6 +117,8 @@ class TypeSafeAgentConfig(ModuleConfig):
     give_up_s: float = 5.0  # goal clears after this long without motion
     image_size: tuple[int, int] = (1280, 720)
     lidar_band: tuple[float, float, float] = (-0.2, 0.8, 5.0)  # z_min, z_max, max_range
+    camera_width: int | None = 448  # forward frame sent after the state; None: state only
+    camera_quality: int = 75
     trace_dir: Path | None = None
 
 
@@ -126,6 +130,7 @@ class TypeSafeAgent(Module):
     detections_3d: In[Detection3DArray]
     detections_2d: In[Detection2DArray]
     lidar: In[PointCloud2]
+    color_image: In[Image]
     human_input: In[str]
 
     cmd_vel: Out[Twist]
@@ -139,6 +144,7 @@ class TypeSafeAgent(Module):
         self._det3d: _Latest[Detection3DArray] = _Latest()
         self._det2d: _Latest[Detection2DArray] = _Latest()
         self._lidar: _Latest[PointCloud2] = _Latest()
+        self._camera: _Latest[Image] = _Latest()
         self._client: SystemOne | None = None
         self._lock = threading.Lock()
         self._goal: str | None = None
@@ -166,6 +172,7 @@ class TypeSafeAgent(Module):
         self.register_disposable(Disposable(self.detections_3d.subscribe(self._det3d.put)))
         self.register_disposable(Disposable(self.detections_2d.subscribe(self._det2d.put)))
         self.register_disposable(Disposable(self.lidar.subscribe(self._lidar.put)))
+        self.register_disposable(Disposable(self.color_image.subscribe(self._camera.put)))
         self.register_disposable(Disposable(self.human_input.subscribe(self.set_goal)))
         self._stop_event.clear()
         self._threads = [
@@ -260,15 +267,33 @@ class TypeSafeAgent(Module):
             memory=self._memory,
             now=time.monotonic(),
         )
-        qs = questions(tuple(dict.fromkeys(o["label"] for o in state["objects"])))
+        frame = self._frame(stale)
+        qs = questions(
+            tuple(dict.fromkeys(o["label"] for o in state["objects"])), camera=frame is not None
+        )
+        payload: object = state
+        if frame is not None:
+            payload = [
+                {"text": json.dumps(state)},
+                {"image": "data:image/jpeg;base64," + frame},
+            ]
         started, t0 = time.time(), time.monotonic()
-        answers = self._client(state, qs)
-        self._trace(state, qs, answers, started, time.monotonic() - t0)
+        answers = self._client(payload, qs)
+        self._trace(state, qs, answers, started, time.monotonic() - t0, frame)
         drive = decode(
             answers,
             stop_threshold=self.config.stop_threshold,
         )
         self._steer(state, drive)
+
+    def _frame(self, stale: float) -> str | None:
+        """The latest camera frame as base64 JPEG, or None when off or stale."""
+        if self.config.camera_width is None:
+            return None
+        image = self._camera.get(stale)
+        if image is None:
+            return None
+        return image.to_base64(self.config.camera_quality, max_width=self.config.camera_width)
 
     def _steer(self, state: WorldState, drive: Drive) -> None:
         """The model picked directions; geometry to the chosen target sets the magnitudes."""
@@ -344,6 +369,7 @@ class TypeSafeAgent(Module):
         answers: Answers,
         started_at: float,
         latency_s: float,
+        frame: str | None = None,
     ) -> None:
         """Same layout as ``dimos.agents.llm_trace`` so eval adapters read both."""
         if self.config.trace_dir is None or self._client is None:
@@ -351,6 +377,8 @@ class TypeSafeAgent(Module):
         d = Path(self.config.trace_dir)
         d.mkdir(parents=True, exist_ok=True)
         self._seq += 1
+        if frame is not None:
+            (d / f"{self._seq}-camera.jpg").write_bytes(base64.b64decode(frame))
         (d / f"{self._seq}-request.json").write_text(
             json.dumps({"started_at": started_at, "body": {"state": state, "questions": qs}})
         )
