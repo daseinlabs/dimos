@@ -92,6 +92,7 @@ def rig(monkeypatch: pytest.MonkeyPatch) -> Iterator[Rig]:
         "detections_3d",
         "detections_2d",
         "lidar",
+        "color_image",
         "human_input",
         "agent",
         "agent_idle",
